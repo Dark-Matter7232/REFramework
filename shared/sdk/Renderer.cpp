@@ -1,5 +1,6 @@
 #include <spdlog/spdlog.h>
 
+#include "Memory.hpp"
 #include <utility/Scan.hpp>
 #include <utility/Module.hpp>
 
@@ -56,12 +57,12 @@ namespace renderer {
 RenderLayer* RenderLayer::add_layer(::REType* layer_type, uint32_t priority, uint8_t offset) {
     // can be found inside addSceneView
     static RenderLayer* (*add_layer_fn)(RenderLayer*, ::REType*, uint32_t, uint8_t) = nullptr;
-    
+
     if (add_layer_fn == nullptr) {
         spdlog::info("[Renderer] Finding RenderLayer::AddLayer");
 
         const auto mod = utility::get_executable();
-        
+
         auto ref = utility::scan(mod, "41 B8 00 00 00 05 48 8B F8 E8 ? ? ? ?"); // mov r8d, 5000000h; call add_layer
 
         if (!ref) {
@@ -140,7 +141,7 @@ RenderLayer* RenderLayer::add_layer(::REType* layer_type, uint32_t priority, uin
         if (add_layer_fn == nullptr) {
             add_layer_fn = (decltype(add_layer_fn))utility::calculate_absolute(*ref + 10);
 
-            if (add_layer_fn == nullptr || IsBadReadPtr(add_layer_fn, sizeof(add_layer_fn))) {
+            if (add_layer_fn == nullptr || sdk::memory::IsBadMemPtr(false, add_layer_fn, sizeof(add_layer_fn))) {
                 spdlog::error("[Renderer] Failed to calculate add_layer");
                 return nullptr;
             }
@@ -159,23 +160,23 @@ sdk::NativeArray<RenderLayer*>& RenderLayer::get_layers() {
         spdlog::info("[Renderer] Finding RenderLayer::layers");
 
         const auto root_layer = sdk::renderer::get_root_layer();
-        
+
         if (root_layer == nullptr) {
             spdlog::error("[Renderer] Failed to find root layer");
             throw std::runtime_error("[Renderer] Failed to find root layer");
         }
-        
+
         // Scan through the root layer for a pointer to a RenderLayer object
         for (auto i = 0; i < 0x500; i += sizeof(void*)) {
             auto ptr = *(RenderLayer***)((uintptr_t)root_layer + i);
 
-            if (ptr == nullptr || IsBadReadPtr(ptr, sizeof(ptr))) {
+            if (ptr == nullptr || sdk::memory::IsBadMemPtr(false, ptr, sizeof(ptr))) {
                 continue;
             }
 
             const auto potential_layer = *ptr;
 
-            if (potential_layer == nullptr || IsBadReadPtr(potential_layer, sizeof(potential_layer))) {
+            if (potential_layer == nullptr || sdk::memory::IsBadMemPtr(false, potential_layer, sizeof(potential_layer))) {
                 continue;
             }
 

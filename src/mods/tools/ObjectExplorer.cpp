@@ -1982,7 +1982,7 @@ void ObjectExplorer::generate_sdk() {
 #if defined(RE8) || defined(MHRISE)
                 // Property attributes
                 if (variable->attributes != 0 && variable->attributes != -1) {
-                    for (auto attr = (REAttribute*)((uintptr_t)&variable->attributes + variable->attributes); attr != nullptr && !IsBadReadPtr(attr, sizeof(REAttribute)) && attr->info != nullptr; attr = attr->next) {
+                    for (auto attr = (REAttribute*)((uintptr_t)&variable->attributes + variable->attributes); attr != nullptr && !sdk::memory::IsBadMemPtr(false, attr, sizeof(REAttribute)) && attr->info != nullptr; attr = attr->next) {
                         auto type_func = (REType* (*)())attr->info->getType;
 
                         prop_entry["attributes"].emplace_back(
@@ -3724,7 +3724,7 @@ int32_t ObjectExplorer::get_field_offset(REManagedObject* obj, VariableDescripto
 
             // Check it by dereferencing it now
             if (!same) {
-                const bool deref = desc->variableType == 0 && *(void**)data.data() != nullptr && !IsBadReadPtr(*(void**)data.data(), 1);
+                const bool deref = desc->variableType == 0 && *(void**)data.data() != nullptr && !sdk::memory::IsBadMemPtr(false, *(void**)data.data(), 1);
 
                 if (deref) {
                     same = tester.is_value_same(deref ? *(uint8_t**)data.data() : data.data());
@@ -3981,7 +3981,7 @@ void ObjectExplorer::populate_classes() {
         for (auto i = 0; i < type_list.numAllocated; ++i) {
             auto t = (*type_list.data)[i];
 
-            if (t == nullptr || IsBadReadPtr(t, sizeof(REType))) {
+            if (t == nullptr || sdk::memory::IsBadMemPtr(false, t, sizeof(REType))) {
                 continue;
             }
 

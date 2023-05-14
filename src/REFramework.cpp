@@ -57,9 +57,9 @@ void REFramework::hook_monitor() {
 
     const auto renderer_type = get_renderer_type();
 
-    if (d3d11 == nullptr || d3d12 == nullptr 
-        || (renderer_type == REFramework::RendererType::D3D11 && d3d11 != nullptr && !d3d11->is_inside_present()) 
-        || (renderer_type == REFramework::RendererType::D3D12 && d3d12 != nullptr && !d3d12->is_inside_present())) 
+    if (d3d11 == nullptr || d3d12 == nullptr
+        || (renderer_type == REFramework::RendererType::D3D11 && d3d11 != nullptr && !d3d11->is_inside_present())
+        || (renderer_type == REFramework::RendererType::D3D12 && d3d12 != nullptr && !d3d12->is_inside_present()))
     {
         // check if present time is more than 5 seconds ago
         if (now - m_last_present_time > std::chrono::seconds(5)) {
@@ -160,7 +160,7 @@ REFramework::REFramework(HMODULE reframework_module)
     spdlog::info("Game Module Size: {:x}", module_size);
 
     // preallocate some memory for minhook to mitigate failures (temporarily at least... this should in theory fail when too many hooks are made)
-    // but, 64 slots should be enough for now. 
+    // but, 64 slots should be enough for now.
     // so... TODO: modify minhook to use absolute jumps when failing to allocate memory nearby
     const auto halfway_module = (uintptr_t)m_game_module + (module_size / 2);
     const auto pre_allocated_buffer = (uintptr_t)AllocateBuffer((LPVOID)halfway_module); // minhook function
@@ -442,7 +442,7 @@ void REFramework::run_imgui_frame(bool from_present) {
 
     consume_input();
     update_fonts();
-    
+
     ImGui_ImplWin32_NewFrame();
 
     // from_present is so we don't accidentally
@@ -492,7 +492,7 @@ void REFramework::on_frame_d3d11() {
     }
 
     auto device = m_d3d11_hook->get_device();
-    
+
     if (device == nullptr) {
         spdlog::error("D3D11 device was null when it shouldn't be, returning...");
         m_initialized = false;
@@ -518,7 +518,7 @@ void REFramework::on_frame_d3d11() {
             ImGui_ImplDX11_NewFrame();
             // hooks don't run until after initialization, so we just render the imgui window while initalizing.
             run_imgui_frame(true);
-        } else {   
+        } else {
             return;
         }
     } else {
@@ -574,7 +574,7 @@ void REFramework::on_frame_d3d12() {
 
     auto command_queue = m_d3d12_hook->get_command_queue();
     //spdlog::debug("on_frame (D3D12)");
-    
+
     if (!m_initialized) {
         if (!initialize()) {
             return;
@@ -621,7 +621,7 @@ void REFramework::on_frame_d3d12() {
             ImGui_ImplDX12_NewFrame();
             // hooks don't run until after initialization, so we just render the imgui window while initalizing.
             run_imgui_frame(true);
-        } else {   
+        } else {
             return;
         }
     } else {
@@ -688,7 +688,7 @@ void REFramework::on_post_present_d3d12() {
 
         return;
     }
-    
+
     for (auto& mod : m_mods->get_mods()) {
         mod->on_post_present();
     }
@@ -788,7 +788,7 @@ bool REFramework::on_message(HWND wnd, UINT message, WPARAM w_param, LPARAM l_pa
         }
 
         m_last_keys[w_param] = true;
-        
+
         break;
     }
     case WM_KEYUP:
@@ -803,7 +803,7 @@ bool REFramework::on_message(HWND wnd, UINT message, WPARAM w_param, LPARAM l_pa
         if (GET_RAWINPUT_CODE_WPARAM(w_param) == RIM_INPUT) {
             uint32_t size = sizeof(RAWINPUT);
             RAWINPUT raw{};
-            
+
             // obtain size
             GetRawInputData((HRAWINPUT)l_param, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
 
@@ -941,7 +941,7 @@ std::filesystem::path REFramework::get_persistent_dir() {
         s_checked_file_permissions = true;
         return return_appdata_dir();
     }
-    
+
     return std::filesystem::path(*utility::get_module_path(utility::get_executable())).parent_path();
 }
 
@@ -1074,7 +1074,7 @@ void REFramework::draw_ui() {
     } else {
         patch_set_cursor_pos();
     }
-    
+
     // UI Specific code:
     m_is_ui_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
 
@@ -1443,7 +1443,7 @@ bool REFramework::initialize() {
 
         static const auto imgui_ini = (get_persistent_dir() / "ref_ui.ini").string();
         ImGui::GetIO().IniFilename = imgui_ini.c_str();
-        
+
         if (!ImGui_ImplWin32_Init(m_wnd)) {
             spdlog::error("Failed to initialize ImGui ImplWin32.");
             return false;
@@ -1690,7 +1690,7 @@ void REFramework::deinit_d3d11() {
 
 bool REFramework::init_d3d12() {
     deinit_d3d12();
-    
+
     auto device = m_d3d12_hook->get_device();
 
     spdlog::info("[D3D12] Creating command allocator...");
@@ -1720,7 +1720,7 @@ bool REFramework::init_d3d12() {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
 
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = (int)D3D12::RTV::COUNT; 
+        desc.NumDescriptors = (int)D3D12::RTV::COUNT;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         desc.NodeMask = 1;
 
@@ -1732,9 +1732,9 @@ bool REFramework::init_d3d12() {
 
     spdlog::info("[D3D12] Creating SRV descriptor heap...");
 
-    { 
+    {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
-        
+
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         desc.NumDescriptors = (int)D3D12::SRV::COUNT;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
