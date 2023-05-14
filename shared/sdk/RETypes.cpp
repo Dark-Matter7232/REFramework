@@ -1,5 +1,6 @@
 #include <spdlog/spdlog.h>
 
+#include "Memory.hpp"
 #include "utility/Scan.hpp"
 #include "utility/Module.hpp"
 
@@ -77,7 +78,7 @@ RETypes::RETypes() {
                 spdlog::info("Could not find alternative reference for types, filling types from TDB instead");
                 fill_types_from_tdb();
             }
-            
+
             return;
         }
 
@@ -110,7 +111,7 @@ RETypes::RETypes() {
     }
 
     spdlog::info("Initial ref: {:x}", (uintptr_t)*ref);
-    
+
     m_raw_types = (TypeList*)(utility::calculate_absolute(*ref + types_offset));
     spdlog::info("Initial TypeList: {:x}", (uintptr_t)m_raw_types);
 
@@ -208,7 +209,7 @@ void RETypes::fill_types_from_tdb() {
     if (tdb == nullptr) {
         return;
     }
-    
+
     spdlog::info("Filling types from TDB");
 
     for (auto i = 0; i < tdb->get_num_types(); ++i) {
@@ -241,7 +242,7 @@ void RETypes::refresh_map() {
     for (auto i = 0; i < typeList.numAllocated; ++i) {
         auto t = (*typeList.data)[i];
 
-        if (t == nullptr || IsBadReadPtr(t, sizeof(REType)) || ((uintptr_t)t & (sizeof(void*) - 1)) != 0) {
+        if (t == nullptr || sdk::memory::IsBadMemPtr(false, t, sizeof(REType)) || ((uintptr_t)t & (sizeof(void*) - 1)) != 0) {
             continue;
         }
 

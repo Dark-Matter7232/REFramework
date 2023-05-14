@@ -1,6 +1,7 @@
 #include <shared_mutex>
 #include <spdlog/spdlog.h>
 
+#include "Memory.hpp"
 #include "utility/Scan.hpp"
 #include "utility/Module.hpp"
 
@@ -100,7 +101,7 @@ namespace sdk {
 
         std::optional<Address> ref{};
         const CtxPattern* context_pattern{nullptr};
-        
+
         for (const auto& pattern : patterns) {
             ref = {};
             references.clear();
@@ -136,7 +137,7 @@ namespace sdk {
         for (auto i = 0; i < 0x20000; i += sizeof(void*)) {
             auto ptr = *(sdk::RETypeDB**)((uintptr_t)*s_global_context + i);
 
-            if (ptr == nullptr || IsBadReadPtr(ptr, sizeof(void*)) || ((uintptr_t)ptr & (sizeof(void*) - 1)) != 0) {
+            if (ptr == nullptr || sdk::memory::IsBadMemPtr(false, ptr, sizeof(void*)) || ((uintptr_t)ptr & (sizeof(void*) - 1)) != 0) {
                 continue;
             }
 
@@ -231,11 +232,11 @@ namespace sdk {
                 return;
             }
         }
-        
+
         std::unique_lock _{s_pointers_mtx};
 
         spdlog::info("Locating funcs");
-        
+
         // Version 1
         //auto ref = utility::scan(g_framework->getModule().as<HMODULE>(), "48 83 78 18 00 74 ? 48 89 D9 E8 ? ? ? ? 48 89 D9 E8 ? ? ? ?");
 
@@ -517,5 +518,3 @@ namespace sdk {
         return VM::get_invoke_table();
     }
 }
-
-
