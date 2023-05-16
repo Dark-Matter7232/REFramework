@@ -18,6 +18,57 @@ D3D12Hook::~D3D12Hook() {
     unhook();
 }
 
+BOOL IsBadMemPtr(BOOL write, void* ptr, size_t size) {
+    MEMORY_BASIC_INFORMATION mbi;
+    BOOL ok;
+    DWORD mask;
+    BYTE* p = (BYTE*)ptr;
+    BYTE* maxp = p + size;
+    BYTE* regend = NULL;
+
+    if (size == 0) {
+        return FALSE;
+    }
+
+    if (p == NULL) {
+        return TRUE;
+    }
+
+    if (write == FALSE) {
+        mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    } else {
+        mask = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    }
+
+    do {
+        if (p == ptr || p == regend) {
+            if (VirtualQuery((LPCVOID)p, &mbi, sizeof(mbi)) == 0) {
+                return TRUE;
+            } else {
+                regend = ((BYTE*)mbi.BaseAddress + mbi.RegionSize);
+            }
+        }
+
+        ok = (mbi.Protect & mask) != 0;
+
+        if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
+            ok = FALSE;
+        }
+
+        if (!ok) {
+            return TRUE;
+        }
+
+        if (maxp <= regend) {
+            return FALSE;
+        } else if (maxp > regend) {
+            p = regend;
+        }
+    } while (p < maxp);
+
+    return FALSE;
+}
+        
 bool D3D12Hook::hook() {
     spdlog::info("Hooking D3D12");
 
@@ -231,7 +282,7 @@ bool D3D12Hook::hook() {
         const auto base = (uintptr_t)swap_chain1 + i;
 
         // reached the end
-        if (IsBadReadPtr((void*)base, sizeof(void*))) {
+        if (IsBadMemPtr(false, (void*)base, sizeof(void*))) {
             break;
         }
 
@@ -251,20 +302,20 @@ bool D3D12Hook::hook() {
             const auto pre_scan_base = (uintptr_t)swap_chain1 + base;
 
             // reached the end
-            if (IsBadReadPtr((void*)pre_scan_base, sizeof(void*))) {
+            if (IsBadMemPtr(false, (void*)pre_scan_base, sizeof(void*))) {
                 break;
             }
 
             const auto scan_base = *(uintptr_t*)pre_scan_base;
 
-            if (scan_base == 0 || IsBadReadPtr((void*)scan_base, sizeof(void*))) {
+            if (scan_base == 0 || IsBadMemPtr(false, (void*)scan_base, sizeof(void*))) {
                 continue;
             }
 
             for (auto i = 0; i < 512 * sizeof(void*); i += sizeof(void*)) {
                 const auto pre_data = scan_base + i;
 
-                if (IsBadReadPtr((void*)pre_data, sizeof(void*))) {
+                if (IsBadMemPtr(false, (void*)pre_data, sizeof(void*))) {
                     break;
                 }
 

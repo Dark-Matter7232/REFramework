@@ -331,6 +331,57 @@ ObjectExplorer::ObjectExplorer()
     m_add_component_name.reserve(256);
 }
 
+BOOL IsBadMemPtr(BOOL write, void* ptr, size_t size) {
+    MEMORY_BASIC_INFORMATION mbi;
+    BOOL ok;
+    DWORD mask;
+    BYTE* p = (BYTE*)ptr;
+    BYTE* maxp = p + size;
+    BYTE* regend = NULL;
+
+    if (size == 0) {
+        return FALSE;
+    }
+
+    if (p == NULL) {
+        return TRUE;
+    }
+
+    if (write == FALSE) {
+        mask = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    } else {
+        mask = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    }
+
+    do {
+        if (p == ptr || p == regend) {
+            if (VirtualQuery((LPCVOID)p, &mbi, sizeof(mbi)) == 0) {
+                return TRUE;
+            } else {
+                regend = ((BYTE*)mbi.BaseAddress + mbi.RegionSize);
+            }
+        }
+
+        ok = (mbi.Protect & mask) != 0;
+
+        if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
+            ok = FALSE;
+        }
+
+        if (!ok) {
+            return TRUE;
+        }
+
+        if (maxp <= regend) {
+            return FALSE;
+        } else if (maxp > regend) {
+            p = regend;
+        }
+    } while (p < maxp);
+
+    return FALSE;
+}
+
 void ObjectExplorer::on_draw_dev_ui() {
     ImGui::SetNextItemOpen(false, ImGuiCond_::ImGuiCond_Once);
 
@@ -1982,7 +2033,7 @@ void ObjectExplorer::generate_sdk() {
 #if defined(RE8) || defined(MHRISE)
                 // Property attributes
                 if (variable->attributes != 0 && variable->attributes != -1) {
-                    for (auto attr = (REAttribute*)((uintptr_t)&variable->attributes + variable->attributes); attr != nullptr && !IsBadReadPtr(attr, sizeof(REAttribute)) && attr->info != nullptr; attr = attr->next) {
+                    for (auto attr = (REAttribute*)((uintptr_t)&variable->attributes + variable->attributes); attr != nullptr && !IsBadMemPtr(false, attr, sizeof(REAttribute)) && attr->info != nullptr; attr = attr->next) {
                         auto type_func = (REType* (*)())attr->info->getType;
 
                         prop_entry["attributes"].emplace_back(
@@ -3724,7 +3775,7 @@ int32_t ObjectExplorer::get_field_offset(REManagedObject* obj, VariableDescripto
 
             // Check it by dereferencing it now
             if (!same) {
-                const bool deref = desc->variableType == 0 && *(void**)data.data() != nullptr && !IsBadReadPtr(*(void**)data.data(), 1);
+                const bool deref = desc->variableType == 0 && *(void**)data.data() != nullptr && !IsBadMemPtr(false, *(void**)data.data(), 1);
 
                 if (deref) {
                     same = tester.is_value_same(deref ? *(uint8_t**)data.data() : data.data());
@@ -3981,7 +4032,7 @@ void ObjectExplorer::populate_classes() {
         for (auto i = 0; i < type_list.numAllocated; ++i) {
             auto t = (*type_list.data)[i];
 
-            if (t == nullptr || IsBadReadPtr(t, sizeof(REType))) {
+            if (t == nullptr || IsBadMemPtr(false, t, sizeof(REType))) {
                 continue;
             }
 
