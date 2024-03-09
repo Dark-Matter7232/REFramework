@@ -303,8 +303,8 @@ REFramework::REFramework(HMODULE reframework_module)
     // Fixes new code added in RE4 only.
     IntegrityCheckBypass::immediate_patch_re4();
 #endif
-    // Seen in SF6
-    IntegrityCheckBypass::remove_stack_destroyer();
+    // // Seen in SF6
+    // IntegrityCheckBypass::remove_stack_destroyer();
     suspender.resume();
 #endif
 
