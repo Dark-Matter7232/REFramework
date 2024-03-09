@@ -516,13 +516,9 @@ void IntegrityCheckBypass::remove_stack_destroyer() {
     spdlog::info("[IntegrityCheckBypass]: Patched stack destroyer!");
 }
 
-void IntegrityCheckBypass::setup_pristine_syscall() {
-    if (s_pristine_protect_virtual_memory != nullptr) {
-        spdlog::info("[IntegrityCheckBypass]: NtProtectVirtualMemory already setup!");
-        return;
-    }
-
-    spdlog::info("[IntegrityCheckBypass]: Copying pristine NtProtectVirtualMemory...");
+// hahahah i hate this
+void IntegrityCheckBypass::fix_virtual_protect() try {
+    spdlog::info("[IntegrityCheckBypass]: Fixing VirtualProtect...");
 
     const auto ntdll_base = GetModuleHandleA("ntdll.dll");
 
@@ -560,13 +556,6 @@ void IntegrityCheckBypass::setup_pristine_syscall() {
     }
 
     spdlog::info("[IntegrityCheckBypass]: Copied NtProtectVirtualMemory to 0x{:X}", (uintptr_t)s_pristine_protect_virtual_memory);
-}
-
-// hahahah i hate this
-void IntegrityCheckBypass::fix_virtual_protect() try {
-    spdlog::info("[IntegrityCheckBypass]: Fixing VirtualProtect...");
-
-    setup_pristine_syscall(); // Called earlier in DllMain
 
     // Hook VirtualProtect
     s_virtual_protect_hook = std::make_unique<FunctionHook>(VirtualProtect, (uintptr_t)virtual_protect_hook);
