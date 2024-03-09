@@ -24,6 +24,8 @@
 #include "vr/runtimes/OpenVR.hpp"
 #include "vr/CameraDuplicator.hpp"
 
+#include "HookManager.hpp"
+
 #include "Mod.hpp"
 
 class REManagedObject;
@@ -43,7 +45,7 @@ public:
     std::string_view get_name() const override { return "VR"; }
 
     // Called when the mod is initialized
-    std::optional<std::string> on_initialize() override;
+    std::optional<std::string> on_initialize_d3d_thread() override;
 
     void on_lua_state_created(sol::state& lua) override;
 
@@ -232,6 +234,9 @@ public:
     }
 
     std::array<RECamera*, 2> get_cameras() const;
+    auto& get_camera_duplicator() {
+        return m_camera_duplicator;
+    }
 
 private:
     Vector4f get_position_unsafe(uint32_t index) const;
@@ -245,6 +250,9 @@ private:
     void on_camera_get_projection_matrix(REManagedObject* camera, Matrix4x4f* result) override;
     static Matrix4x4f* gui_camera_get_projection_matrix_hook(REManagedObject* camera, Matrix4x4f* result);
     void on_camera_get_view_matrix(REManagedObject* camera, Matrix4x4f* result) override;
+    
+    static HookManager::PreHookResult pre_set_hdr_mode(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, uintptr_t ret_addr);
+    static void post_set_hdr_mode(uintptr_t& ret_val, sdk::RETypeDefinition* ret_ty, uintptr_t ret_addr) {}
 
     bool on_pre_overlay_layer_update(sdk::renderer::layer::Overlay* layer, void* render_context) override;
     bool on_pre_overlay_layer_draw(sdk::renderer::layer::Overlay* layer, void* render_context) override;

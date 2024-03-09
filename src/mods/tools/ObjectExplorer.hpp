@@ -3,6 +3,9 @@
 #include <vector>
 #include <deque>
 #include <unordered_set>
+#include <unordered_map>
+#include <memory>
+#include <string>
 #include <imgui.h>
 #include <json.hpp>
 #include <asmjit/asmjit.h>
@@ -158,6 +161,7 @@ private:
     void display_reflection_properties(REManagedObject* obj, REType* type_info);
     void display_native_methods(REManagedObject* obj, sdk::RETypeDefinition* tdef);
     void display_native_fields(REManagedObject* obj, sdk::RETypeDefinition* tdef);
+    void attempt_display_method(REManagedObject* obj, sdk::REMethodDefinition& m, bool use_full_name = false);
     void attempt_display_field(REManagedObject* obj, VariableDescriptor* desc, REType* type_info);
     void display_data(void* data, void* real_data, std::string type_name, bool is_enum = false, bool managed_str = false, const sdk::RETypeDefinition* override_def = nullptr);
     int32_t get_field_offset(REManagedObject* obj, VariableDescriptor* desc, REType* type_info);
@@ -167,7 +171,7 @@ private:
     void context_menu(void* address, std::optional<std::string> name = std::nullopt, std::optional<std::function<void()>> additional_context = std::nullopt);
     void hook_method(sdk::REMethodDefinition* method, std::optional<std::string> name);
     void hook_all_methods(sdk::RETypeDefinition* type);
-    void method_context_menu(sdk::REMethodDefinition* method, std::optional<std::string> name);
+    void method_context_menu(sdk::REMethodDefinition* method, std::optional<std::string> name, ::REManagedObject* obj = nullptr);
     void make_same_line_text(std::string_view text, const ImVec4& color);
 
     void make_tree_offset(REManagedObject* object, uint32_t offset, std::string_view name, std::function<void()> widget = nullptr);
@@ -213,14 +217,18 @@ private:
         return path;
     }
 
-    HookManager::PreHookResult pre_hooked_method_internal(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, void* reserved, sdk::REMethodDefinition* method);
-    static HookManager::PreHookResult pre_hooked_method(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, void* reserved, sdk::REMethodDefinition* method);
+    HookManager::PreHookResult pre_hooked_method_internal(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, uintptr_t ret_addr, sdk::REMethodDefinition* method);
+    static HookManager::PreHookResult pre_hooked_method(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, uintptr_t ret_addr, sdk::REMethodDefinition* method);
 
     struct PinnedObject {
         Address address{};
         std::string name{};
         std::string path{};
     };
+
+    std::recursive_mutex m_hooked_methods_mtx{};
+    std::recursive_mutex m_job_mutex{};
+    std::vector<std::function<void()>> m_frame_jobs{};
 
     struct HookedMethod {
         std::string name{};
@@ -229,6 +237,15 @@ private:
         bool skip{false};
         size_t hook_id{};
         uint32_t call_count{};
+
+        std::unordered_set<uintptr_t> return_addresses{};
+        std::unordered_map<uintptr_t, sdk::REMethodDefinition*> return_addresses_to_methods{};
+        std::unordered_set<sdk::REMethodDefinition*> callers{};
+        struct CallerContext {
+            size_t call_count{};
+        };
+
+        std::unordered_map<sdk::REMethodDefinition*, CallerContext> callers_context{};
     };
 
     asmjit::JitRuntime m_jit_runtime;
@@ -244,6 +261,7 @@ private:
     std::string m_type_name{"via.typeinfo.TypeInfo"};
     std::string m_type_member{""};
     std::string m_type_field{""};
+    std::string m_method_address{ "0" };
     std::string m_object_address{ "0" };
     std::string m_add_component_name{ "via.Component" };
     std::chrono::system_clock::time_point m_next_refresh;
@@ -259,6 +277,7 @@ private:
     std::unordered_set<void*> m_known_stub_methods{};
     std::unordered_set<void*> m_ok_methods{};
     std::unordered_map<void*, uint32_t> m_function_occurrences{}; // occurrences of re-uses of the function address in other methods
+    std::unordered_map<uintptr_t, sdk::REMethodDefinition*> m_method_map{};
     std::unordered_multimap<std::string, EnumDescriptor> m_enums;
     std::unordered_map<std::string, REType*> m_types;
     std::vector<std::string> m_sorted_types;
@@ -267,6 +286,7 @@ private:
 
     // Types currently being displayed
     std::vector<REType*> m_displayed_types;
+    sdk::REMethodDefinition* m_displayed_method{nullptr};
 
     std::vector<uint8_t> m_module_chunk{};
 

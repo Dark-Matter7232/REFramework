@@ -23,7 +23,10 @@
 #include "sdk/regenny/re2_tdb70/via/Window.hpp"
 #include "sdk/regenny/re2_tdb70/via/SceneView.hpp"
 #elif TDB_VER >= 71
-#ifdef RE4
+#ifdef SF6
+#include "sdk/regenny/sf6/via/Window.hpp"
+#include "sdk/regenny/sf6/via/SceneView.hpp"
+#elif defined(RE4)
 #include "sdk/regenny/re4/via/Window.hpp"
 #include "sdk/regenny/re4/via/SceneView.hpp"
 #else
@@ -186,6 +189,14 @@ void VR::on_view_get_size(REManagedObject* scene_view, float* result) {
 
         wanted_width = (float)window_width;
         wanted_height = (float)window_height;
+
+        // Might be usable in other games too
+#if defined(SF6)
+        if (!is_gng) {
+            window->borderless_size.w = (float)window_width;
+            window->borderless_size.h = (float)window_height;
+        }
+#endif
     }
 
     //auto out = original_func(scene_view, result);
@@ -224,7 +235,9 @@ void VR::on_camera_get_projection_matrix(REManagedObject* camera, Matrix4x4f* re
     }
 
     if (is_using_multipass()) {
-        //return;
+        if (camera != m_multipass_cameras[0] && camera != m_multipass_cameras[1]) {
+            return;
+        }
     }
 
 #ifdef RE4
@@ -304,6 +317,18 @@ void VR::on_camera_get_view_matrix(REManagedObject* camera, Matrix4x4f* result) 
         // Apply the complete eye transform. This fixes the need for parallel projections on all canted headsets like Pimax
         mtx = current_eye_transform * mtx;
     //}
+}
+
+HookManager::PreHookResult VR::pre_set_hdr_mode(std::vector<uintptr_t>& args, std::vector<sdk::RETypeDefinition*>& arg_tys, uintptr_t ret_addr) {
+    if (!VR::get()->is_hmd_active()) {
+        return HookManager::PreHookResult::CALL_ORIGINAL;
+    }
+
+    if (args.size() >= 2) {
+        args[1] = 0;
+    }
+
+    return HookManager::PreHookResult::CALL_ORIGINAL;
 }
 
 void VR::inputsystem_update_hook(void* ctx, REManagedObject* input_system) {
@@ -415,7 +440,7 @@ bool VR::on_pre_overlay_layer_draw(sdk::renderer::layer::Overlay* layer, void* r
     // NOT RE3
     // for some reason RE3 has weird issues with the overlay rendering
     // causing double vision
-#if (TDB_VER < 70 and not defined(RE3)) or (TDB_VER >= 70 and (not defined(RE3) and not defined(RE2) and not defined(RE7) and not defined(RE4)))
+#if (TDB_VER < 70 and not defined(RE3)) or (TDB_VER >= 70 and (not defined(RE3) and not defined(RE2) and not defined(RE7) and not defined(RE4) and not defined(SF6)))
     if (m_allow_engine_overlays->value()) {
         return true;
     }
@@ -528,9 +553,9 @@ void VR::on_prepare_output_layer_draw(sdk::renderer::layer::PrepareOutput* layer
         return;
     }
 
-    auto scene_layers = sdk::renderer::get_output_layer()->find_fully_rendered_scene_layers();
+    auto scene_layers = m_camera_duplicator.get_relevant_scene_layers();
 
-    if (scene_layers.empty() || scene_layers.size() < 2) {
+    if (scene_layers.size() < 2) {
         return;
     }
 
@@ -565,36 +590,22 @@ bool VR::on_pre_scene_layer_update(sdk::renderer::layer::Scene* layer, void* ren
     }
 
     if (is_using_multipass()) {
-        auto output_layer = sdk::renderer::get_output_layer();
+        const auto real_main_camera = sdk::get_primary_camera();
+        const auto layer_camera = layer->get_main_camera_if_possible();
 
-        if (output_layer != nullptr) {
-            const auto scenes = output_layer->find_fully_rendered_scene_layers();
-
-            if (!scenes.empty()) {
-                if (layer == scenes[0]) {
-                    if (auto main_camera = layer->get_main_camera_if_possible(); main_camera != nullptr) {
-                        m_multipass_cameras[0] = main_camera;
-                        m_multipass.pass = 0;
-                    }
-                } else {
-                    if (auto main_camera = layer->get_main_camera_if_possible(); main_camera != nullptr) {
-                        m_multipass_cameras[1] = main_camera;
-                        m_multipass.pass = 1;
-                    }
-                }
+        if (layer_camera != nullptr) {
+            if (layer_camera == real_main_camera) {
+                m_multipass.pass = 0;
+                m_multipass_cameras[0] = real_main_camera;
+                m_multipass_cameras[1] = m_camera_duplicator.get_new_camera_counterpart(real_main_camera);
+            } else if (layer_camera == m_camera_duplicator.get_new_camera_counterpart(real_main_camera)) {
+                m_multipass.pass = 1;
+                m_multipass_cameras[1] = m_camera_duplicator.get_new_camera_counterpart(real_main_camera);
+            } else {
+                return true; // dont care
             }
-        }
-    }
-
-    if (is_using_multipass()) {
-        auto camera = layer->get_camera();
-
-        if (camera != nullptr) {
-            if (m_multipass_cameras[0] != nullptr && m_multipass_cameras[1] != nullptr) {
-                if (camera != m_multipass_cameras[0] && camera != m_multipass_cameras[1]) {
-                    return false;
-                }
-            }
+        } else {
+            return true; // dont care
         }
     }
     
@@ -628,6 +639,14 @@ void VR::on_scene_layer_update(sdk::renderer::layer::Scene* layer, void* render_
 
     if (!layer->is_fully_rendered()) {
         return;
+    }
+
+    if (is_using_multipass()) {
+        const auto layer_camera = layer->get_camera();
+
+        if (layer_camera != m_multipass_cameras[0] && layer_camera != m_multipass_cameras[1]) {
+            return;
+        }
     }
 
     auto& layer_data = m_scene_layer_data[layer];
@@ -764,7 +783,7 @@ float VR::get_sharpness_hook(void* tonemapping) {
 */
 
 // Called when the mod is initialized
-std::optional<std::string> VR::on_initialize() try {
+std::optional<std::string> VR::on_initialize_d3d_thread() try {
     auto openvr_error = initialize_openvr();
 
     if (openvr_error || !m_openvr->loaded) {
@@ -828,6 +847,17 @@ and place the openxr_loader.dll in the same folder.)";
 
     if (hijack_error) {
         return hijack_error;
+    }
+
+    const auto renderer_t = sdk::find_type_definition("via.render.Renderer");
+
+    if (renderer_t != nullptr) {
+        const auto set_hdr_method = renderer_t->get_method("set_HDRMode");
+
+        if (set_hdr_method != nullptr) {
+            spdlog::info("Hooking setHDRMode");
+            g_hookman.add(set_hdr_method, &pre_set_hdr_mode, &post_set_hdr_mode);
+        }
     }
 
     m_init_finished = true;
@@ -1288,6 +1318,8 @@ std::optional<std::string> VR::hijack_resolution() {
 
 std::optional<std::string> VR::hijack_input() {
 #if defined(RE2) || defined(RE3)
+    spdlog::info("[VR] Hijacking InputSystem");
+
     // We're going to hook InputSystem.update so we can
     // override the analog stick values with the VR controller's
     auto func = sdk::find_native_method(game_namespace("InputSystem"), "update");
@@ -1310,6 +1342,8 @@ std::optional<std::string> VR::hijack_input() {
 }
 
 std::optional<std::string> VR::hijack_camera() {
+    spdlog::info("[VR] Hijacking Camera");
+
     const auto get_projection_matrix = (uintptr_t)sdk::find_native_method("via.Camera", "get_ProjectionMatrix");
 
     ///////////////////////////////
@@ -1344,6 +1378,9 @@ std::optional<std::string> VR::hijack_camera() {
 
 std::optional<std::string> VR::hijack_wwise_listeners() {
 #ifndef RE4
+#ifndef SF6
+    spdlog::info("[VR] Hijacking WwiseListener");
+
     const auto t = sdk::find_type_definition("via.wwise.WwiseListener");
 
     if (t == nullptr) {
@@ -1374,13 +1411,15 @@ std::optional<std::string> VR::hijack_wwise_listeners() {
 
     const auto vtable_index = *(uint8_t*)(*jmp + 3) / sizeof(void*);
     spdlog::info("via.wwise.WwiseListener.update vtable index: {}", vtable_index);
+    spdlog::info("Attempting to create fake via.wwise.WwiseListener instance");
 
     const void* fake_obj = t->create_instance_full();
 
     if (fake_obj == nullptr) {
         return "VR init failed: Failed to create fake via.wwise.WwiseListener instance.";
     }
-
+    
+    spdlog::info("Attempting to read vtable from fake via.wwise.WwiseListener instance");
     auto obj_vtable = *(void***)fake_obj;
 
     if (obj_vtable == nullptr) {
@@ -1402,6 +1441,7 @@ std::optional<std::string> VR::hijack_wwise_listeners() {
     if (!g_wwise_listener_update_hook->create()) {
         return "VR init failed: via.wwise.WwiseListener update native function hook failed.";
     }
+#endif
 #endif
 
     return std::nullopt;
@@ -1522,23 +1562,15 @@ void VR::update_hmd_state() {
     // Update the poses used for the game
     // If we used the data directly from the WaitGetPoses call, we would have to lock a different mutex and wait a long time
     // This is because the WaitGetPoses call is blocking, and we don't want to block any game logic
-    {
-        if (runtime->wants_reset_origin && runtime->ready()) {
-            std::unique_lock _{ runtime->pose_mtx };
+    if (runtime->wants_reset_origin && runtime->ready() && runtime->got_first_valid_poses) {
+        std::unique_lock _{ runtime->pose_mtx };
+        set_rotation_offset(glm::identity<glm::quat>());
+        m_standing_origin = get_position_unsafe(vr::k_unTrackedDeviceIndex_Hmd);
 
-            set_rotation_offset(glm::identity<glm::quat>());
-            m_standing_origin = get_position_unsafe(vr::k_unTrackedDeviceIndex_Hmd);
-
-            runtime->wants_reset_origin = false;
-        }
+        runtime->wants_reset_origin = false;
     }
 
     runtime->update_matrices(m_nearz, m_farz);
-
-    // On first run, set the standing origin to the headset position
-    if (!runtime->got_first_poses) {
-        m_standing_origin = get_position(vr::k_unTrackedDeviceIndex_Hmd);
-    }
 
     runtime->got_first_poses = true;
 
@@ -1558,20 +1590,26 @@ void VR::update_hmd_state() {
             if (camera == cameras[0]) {
                 FirstPerson::get()->on_update_transform(camera->ownerGameObject->transform);
             } else if (cameras[0] != nullptr && cameras[0]->ownerGameObject != nullptr && cameras[0]->ownerGameObject->transform != nullptr) {
-                const auto first_camera_joint = utility::re_transform::get_joint(*cameras[0]->ownerGameObject->transform, 0);
+                auto transform0 = cameras[0]->ownerGameObject->transform;
+                auto transform1 = camera->ownerGameObject->transform;
 
-                if (first_camera_joint == nullptr) {
-                    continue;
-                }
-
-                const auto camera_joint = utility::re_transform::get_joint(*camera->ownerGameObject->transform, 0);
+                const auto camera_joint = utility::re_transform::get_joint(*transform1, 0);
 
                 if (camera_joint == nullptr) {
                     continue;
                 }
 
-                sdk::set_joint_position(camera_joint, sdk::get_joint_position(first_camera_joint));
-                sdk::set_joint_rotation(camera_joint, sdk::get_joint_rotation(first_camera_joint));
+                auto& fp = FirstPerson::get();
+
+                const auto mat = fp->get_last_camera_matrix();
+                const auto pos = mat[3];
+
+                //transform1->angles = transform0->angles;
+                //transform1->position = transform0->position;
+                transform1->worldTransform = transform0->worldTransform;
+
+                sdk::set_joint_position(camera_joint, pos);
+                sdk::set_joint_rotation(camera_joint, mat);
             }
         }
     }
@@ -2221,6 +2259,11 @@ void VR::disable_bad_effects() {
                 spdlog::info("[VR] Delay render modified");
             }
         }
+    } else if (is_sf6) {
+        // Must be on in SF6 or left eye gets stuck
+        if (set_delay_render_enable_method != nullptr) {
+            set_delay_render_enable_method->call<void*>(context, true);
+        }
     }
 
 #ifdef RE7
@@ -2562,6 +2605,12 @@ void VR::on_post_present() {
     if (!runtime->loaded) {
         return;
     }
+
+    const auto renderer = g_framework->get_renderer_type();
+
+    if (renderer == REFramework::RendererType::D3D12) {
+        m_d3d12.on_post_present(this);
+    }
     
     if (is_using_multipass() || (m_render_frame_count + 1) % 2 == m_left_eye_interval) {
         runtime->consume_events(nullptr);
@@ -2685,14 +2734,8 @@ bool VR::on_pre_gui_draw_element(REComponent* gui_element, void* primitive_conte
 
 #ifdef RE7
         if (name_hash == "HUD"_fnv) { // not a hero
-            game_object->transform->worldTransform = Matrix4x4f{ 
-                3.0f, 0.0f, 0.0f, 0.0f,
-                0.0f, 3.0f, 0.0f, 0.0f,
-                0.0f, 0.0f, 3.0f, 0.0f,
-                0.0f, 0.0f, 0.0f, 1.0f
-            };
-
-            return true;
+            // Stops HUD element from being stuck to the screen
+            sdk::call_object_func<REComponent*>(gui_element, "set_RenderTarget", context, gui_element, nullptr);
         }
 #endif
 
@@ -3344,13 +3387,7 @@ void VR::on_end_rendering(void* entry) {
             m_multipass.eye_textures[0] = (ID3D12Resource*)temporal_upscaler->get_upscaled_texture<void*>(0);
             m_multipass.eye_textures[1] = (ID3D12Resource*)temporal_upscaler->get_upscaled_texture<void*>(1);
         } else {
-            auto output_layer = sdk::renderer::get_output_layer();
-
-            if (output_layer == nullptr) {
-                return;
-            }
-
-            const auto scene_layers = output_layer->find_fully_rendered_scene_layers();
+            const auto scene_layers = m_camera_duplicator.get_relevant_scene_layers();
 
             if (scene_layers.size() < 2) {
                 return;

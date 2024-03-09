@@ -4,7 +4,8 @@
 #include <utility/FunctionHook.hpp>
 #include <sdk/intrusive_ptr.hpp>
 
-#include "vr/D3D12Component.hpp"
+#include "vr/d3d12/CommandContext.hpp"
+#include "vr/d3d12/TextureContext.hpp"
 #include "Mod.hpp"
 
 namespace sdk {
@@ -148,7 +149,7 @@ private:
 
 
     struct EyeState {
-        sdk::renderer::layer::Scene* scene_layer{nullptr};
+        sdk::intrusive_ptr<sdk::renderer::layer::Scene> scene_layer{};
         ComPtr<ID3D12Resource> motion_vectors{};
         ComPtr<ID3D12Resource> depth{};
         ComPtr<ID3D12Resource> color{};
@@ -184,8 +185,7 @@ private:
     float m_motion_scale[2]{-1.0f, 1.0f};
     float m_jitter_evaluate_scale{1.0f};
 
-    vrmod::D3D12Component::ResourceCopier m_copier{};
-    vrmod::D3D12Component::ResourceCopier m_big_copier{};
+    std::array<d3d12::CommandContext, 3> m_copiers{};
     ComPtr<ID3D12Resource> m_old_backbuffer{};
 
     std::array<std::array<Matrix4x4f, 6>, 2> m_old_projection_matrix{};

@@ -27,6 +27,9 @@
 #ifdef RE4
 #include "sdk/regenny/re4/via/Window.hpp"
 #include "sdk/regenny/re4/via/SceneView.hpp"
+#elif defined(SF6)
+#include "sdk/regenny/sf6/via/Window.hpp"
+#include "sdk/regenny/sf6/via/SceneView.hpp"
 #else
 #include "sdk/regenny/re8/via/Window.hpp"
 #include "sdk/regenny/re8/via/SceneView.hpp"
@@ -102,6 +105,11 @@ void TemporalUpscaler::on_draw_ui() {
         return;
     }
 
+#if TDB_VER < 69
+    ImGui::TextWrapped("TemporalUpscaler is not yet supported on this version of the engine.");
+    ImGui::TextWrapped("Supported: RE2/RE3/RE7 (RT latest, not beta builds), RE4, RE8, SF6");
+    return;
+#else
     if (!m_backend_loaded) {
         ImGui::TextWrapped("Backend is not loaded, TemporalUpscaler will not work.");
         ImGui::TextWrapped("Make sure you've downloaded UpscalerBasePlugin (PDPerfPlugin.dll)");
@@ -191,6 +199,7 @@ void TemporalUpscaler::on_draw_ui() {
 
         ImGui::TreePop();
     }
+#endif
 }
 
 void TemporalUpscaler::on_early_present() {
@@ -243,7 +252,8 @@ void TemporalUpscaler::on_early_present() {
         const auto is_vr_multipass = vr_enabled && vr->is_using_multipass();
         const auto frame = vr->get_render_frame_count();
 
-        m_copier.wait(INFINITE);
+        auto& copier = m_copiers[swapchain->GetCurrentBackBufferIndex() % m_copiers.size()];
+        copier.wait(INFINITE);
 
         if (vr_enabled && is_vr_multipass) {
             for (auto& state : m_eye_states) {
@@ -401,12 +411,12 @@ void TemporalUpscaler::on_early_present() {
                     //params.renderSizeX, params.renderSizeY, params.sharpness, params.jitterOffsetX, params.jitterOffsetY, params.motionScaleX, params.motionScaleY, params.reset, params.nearPlane, params.farPlane, params.verticalFOV, params.execute);
 
                 if (i == 0) {
-                    m_copier.copy((ID3D12Resource*)m_upscaled_textures[evaluate_index], backbuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PRESENT);
+                    copier.copy((ID3D12Resource*)m_upscaled_textures[evaluate_index], backbuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PRESENT);
                 }
             }
         }
 
-        m_copier.execute();
+        copier.execute();
 
         static bool once = true;
 
@@ -489,8 +499,9 @@ bool TemporalUpscaler::init_upscale_features() {
         out_h = bb_desc.Height;
         out_format = bb_desc.Format;
 
-        m_copier.setup();
-        m_big_copier.setup();
+        for (auto& copier : m_copiers) {
+            copier.setup();
+        }
     } else {
         auto& hook = g_framework->get_d3d11_hook();
 
@@ -566,7 +577,9 @@ void TemporalUpscaler::release_upscale_features() {
         return;
     }
 
-    m_copier.wait(2000);
+    for (auto& copier : m_copiers) {
+        copier.wait(2000);
+    }
 
     if (m_upscaled_textures[0] != nullptr) {
         ReleaseUpscaleFeature(get_evaluate_id(0));
@@ -579,8 +592,9 @@ void TemporalUpscaler::release_upscale_features() {
     }
 
     m_wants_reinitialize = true;
-    m_copier.reset();
-    m_big_copier.reset();
+    for (auto& copier : m_copiers) {
+        copier.reset();
+    }
     
     for (auto& state : m_eye_states) {
         state.color.Reset();
@@ -742,6 +756,12 @@ void TemporalUpscaler::on_scene_layer_update(sdk::renderer::layer::Scene* layer,
         }
     }
 
+    if (vr->is_hmd_active() && vr->is_using_multipass()) {
+        if (layer != m_eye_states[0].scene_layer && layer != m_eye_states[1].scene_layer) {
+            return;
+        }
+    }
+
     auto scene_info = layer->get_scene_info();
     auto depth_distortion_scene_info = layer->get_depth_distortion_scene_info();
     auto filter_scene_info = layer->get_filter_scene_info();
@@ -758,10 +778,10 @@ void TemporalUpscaler::on_scene_layer_update(sdk::renderer::layer::Scene* layer,
         auto output_layer = sdk::renderer::get_output_layer();
 
         if (output_layer != nullptr) {
-            const auto scenes = output_layer->find_fully_rendered_scene_layers();
+            const auto scenes = vr->get_camera_duplicator().get_relevant_scene_layers();
 
             if (!scenes.empty()) {
-                if (layer == scenes[0]) {
+                if (layer == m_eye_states[0].scene_layer) {
                     vr_index = 0;
                 } else {
                     vr_index = 1;
@@ -931,12 +951,13 @@ void TemporalUpscaler::on_pre_application_entry(void* entry, const char* name, s
     if (hash == "EndRendering"_fnv) {
         fix_output_layer();
 
-        const auto is_vr_multipass = VR::get()->is_hmd_active() && VR::get()->is_using_multipass();
+        auto& vr = VR::get();
+        const auto is_vr_multipass = vr->is_hmd_active() && vr->is_using_multipass();
         auto root_layer = sdk::renderer::get_root_layer();
 
         if (root_layer != nullptr) {
             auto [output_parent, output_layer] = root_layer->find_layer_recursive("via.render.layer.Output");
-            auto valid_scene_layers = (*output_layer)->find_fully_rendered_scene_layers();
+            auto valid_scene_layers =  is_vr_multipass ? vr->get_camera_duplicator().get_relevant_scene_layers() : (*output_layer)->find_fully_rendered_scene_layers();
 
             if (valid_scene_layers.empty()) {
                 m_eye_states[0].scene_layer = nullptr;
@@ -947,19 +968,18 @@ void TemporalUpscaler::on_pre_application_entry(void* entry, const char* name, s
             if (valid_scene_layers.size() > 1) {
                 if (!is_vr_multipass) {
                     if (m_displayed_scene == 0) {
-                        m_eye_states[0].scene_layer = (sdk::renderer::layer::Scene*)valid_scene_layers[0];
+                        m_eye_states[0].scene_layer = valid_scene_layers[0];
                     } else {
-                        m_eye_states[0].scene_layer = (sdk::renderer::layer::Scene*)valid_scene_layers[1];
+                        m_eye_states[0].scene_layer = valid_scene_layers[1];
                     }
 
                     m_eye_states[1].scene_layer = nullptr;
                 } else {
-                    // Go through the scene layers and only locate the ones that are not marked independent
-                    m_eye_states[0].scene_layer = (sdk::renderer::layer::Scene*)valid_scene_layers[0];
-                    m_eye_states[1].scene_layer = (sdk::renderer::layer::Scene*)valid_scene_layers[1];
+                    m_eye_states[0].scene_layer = valid_scene_layers[0];
+                    m_eye_states[1].scene_layer = valid_scene_layers[1];
                 }
             } else {
-                m_eye_states[0].scene_layer = (sdk::renderer::layer::Scene*)valid_scene_layers[0];
+                m_eye_states[0].scene_layer = valid_scene_layers[0];
                 m_eye_states[1].scene_layer = nullptr;
             }
 

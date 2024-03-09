@@ -7,6 +7,8 @@
 #include "ReClass.hpp"
 #include "RENativeArray.hpp"
 #include "renderer/RenderResource.hpp"
+#include "intrusive_ptr.hpp"
+#include "ManagedObject.hpp"
 
 class REType;
 struct ID3D12Resource;
@@ -27,17 +29,20 @@ struct SceneInfo {
     Matrix4x4f old_view_projection_matrix;
 };
 
+struct Rect {
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
 class TargetState;
 
 template<typename T>
 class DirectXResource : public RenderResource {
 public:
     T* get_native_resource() const {
-    #if TDB_VER > 67
-        return *(ID3D12Resource**)((uintptr_t)this + 0x10);
-    #else
-        return *(ID3D12Resource**)((uintptr_t)this + 0x18);
-    #endif
+        return *(ID3D12Resource**)((uintptr_t)this + sizeof(RenderResource));
     }
 
 private:
@@ -45,10 +50,38 @@ private:
 
 class Texture : public RenderResource {
 public:
-    Texture* clone();
+    struct Desc {
+        uint32_t width;
+        uint32_t height;
+        uint32_t depth;
+        uint32_t mip;
+        uint32_t arr;
+        uint32_t format; // DXGI_FORMAT/via.render.TextureFormat
 
-    void* get_desc() {
-        return (void*)((uintptr_t)this + sizeof(RenderResource) + sizeof(void*));
+        // rest dont care
+    };
+
+    Texture* clone();
+    Texture* clone(uint32_t new_width, uint32_t new_height) {
+        // Modifying description directly as dont have full definition of the Desc struct
+        auto desc = get_desc();
+
+        const auto old_width = desc->width;
+        const auto old_height = desc->height;
+
+        desc->width = new_width;
+        desc->height = new_height;
+
+        auto new_texture = clone();
+
+        desc->width = old_width;
+        desc->height = old_height;
+
+        return new_texture;
+    }
+
+    Desc* get_desc() {
+        return (Desc*)((uintptr_t)this + sizeof(RenderResource) + sizeof(void*));
     }
 
     DirectXResource<ID3D12Resource>* get_d3d12_resource_container() {
@@ -57,7 +90,13 @@ public:
 
 private:
 #if TDB_VER >= 71
+#ifdef SF6
+    // So because this discrepancy in SF6 is > 8 bytes (which is how much was added to RenderResource), trying to automate this
+    // is a bit trickier so we can look into this later, and just hardcode it for now.
+    static constexpr inline auto s_d3d12_resource_offset = 0xB8;
+#else
     static constexpr inline auto s_d3d12_resource_offset = 0xA0;
+#endif
 #elif TDB_VER == 70
     static constexpr inline auto s_d3d12_resource_offset = 0x98;
 #elif TDB_VER == 69
@@ -80,35 +119,18 @@ public:
         uint8_t unk_pad[0xC];
     };
 
-    RenderTargetView* clone();
+    sdk::intrusive_ptr<RenderTargetView> clone();
+    sdk::intrusive_ptr<RenderTargetView> clone(uint32_t new_width, uint32_t new_height);
 
     Desc& get_desc() {
         return m_desc;
     }
 
-    Texture* get_texture_d3d12() const {
-        return *(Texture**)((uintptr_t)this + s_texture_d3d12_offset);
-    }
-
-    TargetState* get_target_state_d3d12() const {
-        return *(TargetState**)((uintptr_t)this + s_target_state_d3d12_offset);
-    }
+    sdk::intrusive_ptr<Texture>& get_texture_d3d12() const;
+    sdk::intrusive_ptr<TargetState>& get_target_state_d3d12() const;
 
 private:
     Desc m_desc;
-
-#if TDB_VER == 71
-    static constexpr inline auto s_texture_d3d12_offset = 0x98;
-#elif TDB_VER == 70
-    static constexpr inline auto s_texture_d3d12_offset = 0x90;
-#elif TDB_VER == 69
-    static constexpr inline auto s_texture_d3d12_offset = 0x88;
-#elif TDB_VER <= 67
-    // TODO: 66 and below
-    static constexpr inline auto s_texture_d3d12_offset = 0x88;
-#endif
-
-    static constexpr inline auto s_target_state_d3d12_offset = s_texture_d3d12_offset - sizeof(void*);
 };
 
 static_assert(sizeof(RenderTargetView::Desc) == 0x14);
@@ -118,9 +140,14 @@ public:
     struct Desc;
 
     ID3D12Resource* get_native_resource_d3d12() const;
-    TargetState* clone();
+    sdk::intrusive_ptr<TargetState> clone() const;
+    sdk::intrusive_ptr<TargetState> clone(const std::vector<std::array<uint32_t, 2>>& new_dimensions) const;
 
     Desc& get_desc() {
+        return m_desc;
+    }
+
+    const Desc& get_desc() const {
         return m_desc;
     }
 
@@ -128,7 +155,7 @@ public:
         return m_desc.num_rtv;
     }
 
-    RenderTargetView* get_rtv(int32_t index) const {
+    sdk::intrusive_ptr<RenderTargetView> get_rtv(int32_t index) const {
         if (index < 0 || index >= get_rtv_count() || m_desc.rtvs == nullptr) {
             return nullptr;
         }
@@ -136,25 +163,34 @@ public:
         return m_desc.rtvs[index];
     }
 
+    void set_rtv(int32_t index, RenderTargetView* rtv) {
+        if (index < 0 || index >= get_rtv_count() || m_desc.rtvs == nullptr) {
+            return;
+        }
+
+        m_desc.rtvs[index] = rtv;
+    }
+
 public:
     struct Desc {
 #if TDB_VER <= 67
         void* _unk_pad;
 #endif
-        RenderTargetView** rtvs;
-        DepthStencilView* dsv;
+        sdk::intrusive_ptr<RenderTargetView>* rtvs;
+        sdk::intrusive_ptr<DepthStencilView> dsv;
         uint32_t num_rtv;
-        float left;
-        float right;
-        float top;
-        float bottom;
+        Rect rect;
         uint32_t flag;
     } m_desc;
 
     // more here but not needed... for now
 };
 #if TDB_VER > 67
+#ifdef SF6
+static_assert(offsetof(TargetState, m_desc) + offsetof(TargetState::Desc, num_rtv) == 0x28);
+#else
 static_assert(offsetof(TargetState, m_desc) + offsetof(TargetState::Desc, num_rtv) == 0x20);
+#endif
 #else
 static_assert(offsetof(TargetState, m_desc) + offsetof(TargetState::Desc, num_rtv) == 0x28);
 #endif
@@ -178,7 +214,7 @@ public:
     }
 };
 
-class RenderLayer : public REManagedObject {
+class RenderLayer : public sdk::ManagedObject {
 public:
     RenderLayer* add_layer(::REType* layer_type, uint32_t priority, uint8_t offset = 0);
     void add_layer(RenderLayer* existing_layer) {
@@ -279,6 +315,10 @@ public:
     void* get_output_target_d3d12() {
         return get_target_state_resource_d3d12("OutputTarget");
     }
+
+    sdk::renderer::TargetState* get_present_output_state() {
+        return get_target_state("PresentState");
+    }
 };
 
 class Scene : public sdk::renderer::RenderLayer {
@@ -318,6 +358,14 @@ public:
 
     ID3D12Resource* get_hdr_target_d3d12() {
         return get_target_state_resource_d3d12("HDRTarget");
+    }
+
+    auto get_hdr_target() {
+        return get_target_state("HDRTarget");
+    }
+
+    auto get_depth_target() {
+        return get_target_state("DepthTarget");
     }
 
     ID3D12Resource* get_g_buffer_target_d3d12() {
@@ -363,6 +411,45 @@ private:
 };
 
 class Overlay : public sdk::renderer::RenderLayer {
+public:
+    sdk::intrusive_ptr<sdk::renderer::TargetState>& get_main_target_state() {
+        return *(sdk::intrusive_ptr<sdk::renderer::TargetState>*)((uintptr_t)this + sizeof(sdk::renderer::RenderLayer) + sizeof(void*));
+    }
+
+    sdk::intrusive_ptr<sdk::renderer::TargetState>& get_main_depth_target_state() {
+        return *(sdk::intrusive_ptr<sdk::renderer::TargetState>*)((uintptr_t)this + sizeof(sdk::renderer::RenderLayer));
+    }
+
+    sdk::renderer::Texture** get_b8g8r8a8_unorm_textures() {
+        return (sdk::renderer::Texture**)((uintptr_t)this + s_b8g8r8a8_unorm_textures_offset);
+    }
+
+    sdk::renderer::Texture** get_r8g8b8a8_unorm_textures() {
+        return (sdk::renderer::Texture**)((uintptr_t)this + s_r8g8b8a8_unorm_textures_offset);
+    }
+
+    sdk::renderer::TargetState** get_b8g8r8a8_unorm_target_states() {
+        return (sdk::renderer::TargetState**)((uintptr_t)this + s_b8g8r8a8_unorm_target_state_offset);
+    }
+
+    sdk::renderer::TargetState** get_b8g8r8a8_unorm_target_only_states() {
+        return (sdk::renderer::TargetState**)((uintptr_t)this + s_b8g8r8a8_unorm_target_only_state_offset);
+    }
+
+private:
+#if TDB_VER >= 71
+    // SF6/RE4
+    static constexpr inline auto s_b8g8r8a8_unorm_textures_offset = 0x288;
+    static constexpr inline auto s_r8g8b8a8_unorm_textures_offset = 0x260;
+    static constexpr inline auto s_b8g8r8a8_unorm_target_state_offset = 0x1A0;
+    static constexpr inline auto s_b8g8r8a8_unorm_target_only_state_offset = 0x1E0;
+#else
+    // verify
+    static constexpr inline auto s_b8g8r8a8_unorm_textures_offset = 0x288;
+    static constexpr inline auto s_r8g8b8a8_unorm_textures_offset = 0x260;
+    static constexpr inline auto s_b8g8r8a8_unorm_target_state_offset = 0x1A0;
+    static constexpr inline auto s_b8g8r8a8_unorm_target_only_state_offset = 0x1E0;
+#endif
 };
 
 class PostEffect : public sdk::renderer::RenderLayer {
@@ -395,13 +482,83 @@ struct Fence {
     uint32_t unk4{0x70};
 };
 
+namespace command {
+struct Base {
+    uint32_t t : 8;
+    uint32_t size : 24;
+    uint64_t priority{};
+};
+
+static_assert(sizeof(Base) == 0x10);
+
+struct Clear : public Base {
+    uint32_t clear_type{};
+    sdk::renderer::TargetState* target; // target state/uav
+    union {
+        sdk::renderer::RenderTargetView* rtv;
+        sdk::renderer::DepthStencilView* dsv;
+    } view;
+
+    float clear_color[4]{};
+};
+
+static_assert(sizeof(Clear) == 0x38);
+
+struct FenceBase : public Base {
+    const char* name{};
+    sdk::renderer::Fence fence{};
+};
+
+static_assert(sizeof(FenceBase) == 0x28);
+
+struct Fence : public FenceBase {
+    bool wait{};
+    bool begin;
+    bool end;
+    bool complete;
+};
+
+static_assert(sizeof(command::Fence) == 0x30);
+}
+
 class RenderContext {
 public:
+    // via::render::command::TypeId, can change between engine versions
+    command::Base* alloc(uint32_t t, uint32_t size);
+    void clear_rtv(sdk::renderer::RenderTargetView* rtv, float color[4], bool delay = false);
+    void clear_rtv(sdk::renderer::RenderTargetView* rtv, bool delay = false) {
+        float color[4]{0.0f, 0.0f, 0.0f, 0.0f};
+        clear_rtv(rtv, color, delay);
+    }
     void copy_texture(Texture* dest, Texture* src, Fence& fence);
     void copy_texture(Texture* dest, Texture* src) {
         Fence fence{};
         copy_texture(dest, src, fence);
     }
+
+public:
+    uint32_t get_protect_frame() const {
+        return *(uint32_t*)((uintptr_t)this + s_protect_frame_offset);
+    }
+
+    sdk::renderer::TargetState* get_render_target() const {
+        return *(sdk::renderer::TargetState**)((uintptr_t)this + s_current_render_state_offset);
+    }
+
+    bool is_delay_enabled() const {
+        return *(bool*)((uintptr_t)this + s_is_delay_enabled_offset);
+    }
+
+#if TDB_VER >= 69
+    static constexpr inline auto s_protect_frame_offset = 0x68;
+    static constexpr inline auto s_is_delay_enabled_offset = 0x7B;
+    static constexpr inline auto s_current_render_state_offset = 0x98;
+#else
+    // verify
+    static constexpr inline auto s_protect_frame_offset = 0x68;
+    static constexpr inline auto s_is_delay_enabled_offset = 0x7B;
+    static constexpr inline auto s_current_render_state_offset = 0x98;
+#endif
 };
 
 class Renderer {
@@ -446,7 +603,7 @@ std::optional<Vector2f> world_to_screen(const Vector3f& world_pos);
 
 ConstantBuffer* create_constant_buffer(void* desc);
 TargetState* create_target_state(TargetState::Desc* desc);
-Texture* create_texture(void* desc);
+Texture* create_texture(Texture::Desc* desc);
 RenderTargetView* create_render_target_view(sdk::renderer::RenderResource* resource, void* desc);
 }
 }
